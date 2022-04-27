@@ -1,0 +1,355 @@
+---
+title: "Clustering Viviendas"
+author: "Eva Cantín"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: false
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(cluster)
+library(FactoMineR)
+library(factoextra)
+library(NbClust)
+library(clValid)
+```
+
+
+### LECTURA DATOS
+```{r datos, fig.width=3.5, fig.height=3.5}
+vendidos = read.csv("../datos/def.csv")
+
+View(vendidos)
+```
+
+
+```{r eliminar variables}
+vendidos2 = vendidos[,setdiff(colnames(vendidos), c("X.1", "X"))]
+```
+
+
+
+# Variables a excluir de la BBDD
+
+## Variables que no se pueden analizar
+
+Crearemos una nueva base de datos descartando, si las hay, variables tipo texto, indicadores u otras variables que no se puedan analizar. 
+
+```{r quitar, echo = TRUE}
+vendidos = vendidos[,setdiff(colnames(vendidos), c("latitude", "longitude"))]
+
+
+plot(data = vendidos, vendidos$m2~ vendidos$precio_final)
+#with(vendidos,text(vendidos$m2~ vendidos$precio_final, labels=vendidos$distrito,pos=4))
+```
+
+```{r tipos, echo = TRUE}
+vendidos
+descVendidos = data.frame("variable" = colnames(vendidos),
+                      "tipo" = c(rep("numerical", 14), "categorical", "numerical",
+                                 "categorical", rep("numerical", 2)),stringsAsFactors = FALSE)
+rownames(descVendidos) = descVendidos$variable
+descVendidos
+
+```
+
+
+
+
+
+# Valores faltantes 
+
+Generaremos en primer lugar una tabla resumen con el número y porcentaje de valores faltantes en cada variable en la base de datos.
+
+```{r missing, echo = TRUE}
+numNA = apply(vendidos, 2, function(x) sum(is.na(x)))
+percNA = round(100*apply(vendidos, 2, function(x) mean(is.na(x))), 2)
+tablaNA = data.frame("tipo" = descVendidos[,-1], numNA, percNA)
+tablaNA
+```
+
+Generamos otra tabla resumen con el número y porcentaje de valores faltantes en cada sujeto de la base de datos.
+
+```{r aging3, echo = TRUE}
+numNA = apply(vendidos, 1, function(x) sum(is.na(x)))
+percNA = round(100*apply(vendidos, 1, function(x) mean(is.na(x))), 2)
+tablaNA2 = data.frame(numNA, percNA)
+summary(tablaNA2$numNA)
+barplot(table(tablaNA2$percNA), xlab = "% Valores faltantes", ylab = "Número de casos",
+        main = "pisos vendidos")
+
+```
+
+
+Eliminaremos aquellas variables y/o casos con más del 20% de valores faltantes. 
+
+**NOTA:** Dependiendo de la base de datos, puede ser necesario incrementar este límite del 20% para no perder variables relevantes para el estudio, o incluso reducirlo si queremos ser conservadores e imputar lo menos posible. 
+
+```{r aging5, echo = TRUE}
+#vend = vendidos3
+#vend = vend[tablaNA2$percNA <= 40,]
+#varMiss = round(100*apply(vend, 2, function(x) mean(is.na(x))), 2)
+#varMiss
+#patrones = md.pattern(vend, rotate.names = TRUE)
+```
+
+
+
+# CLUSTERING
+
+## Selección de variables a utilizar y preparación de datos
+Agruparemos los pisos en función de sus características para luego relacionar los clusters obtenidos con la variable *precio* o con otras variables no consideradas en el análisis. Además, escalaremos los datos, puesto que cada variable está medida en diferentes unidades y magnitudes y no queremos que esto interfiera en la agrupación.
+
+```{r selvar, fig.width=3.5, fig.height=3.5}
+#FUNCIÓN QUE ELIMINA LAS FILAS QUE TIENEN 1 NULO
+
+vendidos2 = vendidos[, setdiff(colnames(vendidos), c("distrito", "vistas"))]
+
+
+dataCluster = scale(vendidos2, center = TRUE, scale = TRUE)
+```
+
+## Medida de distancia y tendencia de agrupamiento
+
+Se utilizará como medida de distancia la distancia euclídea, ya que nos interesa agrupar cereales con valores de parámetros nutricionales similares, y no con perfiles similares en dichos parámetros. 
+
+*La distancia de Manhattan trata mejor si hay datos anómalos.
+
+
+```{r}
+midist <- get_dist(dataCluster, stand = FALSE, method = "euclidean")
+
+midist2 <- get_dist(dataCluster, stand = FALSE, method = "manhattan")
+
+midist1 <- get_dist(dataCluster, stand = FALSE, method = "binary")
+```
+
+
+```{r dist}
+fviz_dist(midist, show_labels = TRUE, lab_size = 0.3,
+          gradient = list(low = "#00AFBB", mid="black", high = "#FC4E07"))
+```
+
+
+Para obtener el número de clusters óptimo para este algoritmo, podemos aplicar distintos criterios como se observa a continuación. Los resultados para el coeficiente Silhouette, por ejemplo, indican que el número óptimo de clusters es claramente 2. En el gráfico de la suma de cuadrados intra-cluster, no se observa un codo bien diferenciado pero sí que vemos que con 2 clusters la variabilidad intra-cluster será demasiado elevada.
+
+```{r koptKmeans, fig.width=3, fig.height=3}
+dataCluster
+
+fviz_nbclust(x = dataCluster, FUNcluster = kmeans, method = "silhouette", 
+             k.max = 10, verbose = FALSE) +
+  labs(title = "K-means")
+fviz_nbclust(x = dataCluster, FUNcluster = kmeans, method = "wss", 
+             k.max = 10, verbose = FALSE) +
+  labs(title = "K-means")
+```
+
+El número óptimo de clústers parece ser 6. Aunque el coeficiente de Silhoutte nos da 4, como número ideal de clústers, la suma intra-clusters es muy alta para K=4. Sin embargo, la variabilidad para K=6 es mucho más pequela (clusters más homogéneos) 
+
+```{r kmeans, fig.width=3, fig.height=3}
+set.seed(100) #el resultado puede depender de los valores iniciales
+
+#si quiero un centroide concreto, pongo un vector en centers
+#repite 20 veces el clustering --> nstart=20
+#kmeans() devuelve una lista
+clust3 <- kmeans(vendidos2, centers = 6, nstart = 20)
+table(clust3$cluster)
+```
+
+Por último, el análisis gráfico con PCA muestra que se siguen solapando algunos clusters en las dos primeras componentes principales. Más adelante, con los resultados finales del clustering, exploraremos otras componentes para ver si se separan estos clusters solapados.
+
+```{r PCAkmeans, fig.width=4, fig.height=4}
+fviz_cluster(object = list(data=vendidos6, cluster=clust3$cluster), stand = FALSE,
+             ellipse.type = "convex", geom = "point", show.clust.cent = FALSE,
+             labelsize = 8)  +
+  labs(title = "K-MEDIAS + Proyeccion PCA",
+       subtitle = "Dist euclidea, K=6") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+### K-medoides
+
+Probaremos como última opción el método de los k-medoides que, en teoría, debería ser más robusto frente a los valores atípicos.
+
+En este algoritmo también es necesario determinar a priori el número de clusters. Según los criterios de WSS y Silhouette, este número podría estar entre 4 y 6. Probaremos con 5.
+
+```{r koptPam, fig.width=3, fig.height=3}
+
+#pam = k-medoides
+fviz_nbclust(x = vendidos6, FUNcluster = pam, method = "silhouette", 
+             k.max = 10, verbose = FALSE) +
+  labs(title = "Numero optimo de clusters")
+fviz_nbclust(x = vendidos6, FUNcluster = pam, method = "wss", 
+             k.max = 10, verbose = FALSE) +
+  labs(title = "Numero optimo de clusters")
+```
+
+```{r pam, fig.width=3, fig.height=3}
+clust4 <- pam(vendidos6, k = 5)
+table(clust4$clustering)
+```
+
+Vemos a partir del gráfico de scores del PCA que seguimos teniendo clusters que se solapan debido probablemente a que se diferencian en algunas variables que no están correlacionadas con las dos primeras componentes principales por lo que sería necesario explorar más componentes principales.
+
+```{r PCApam, fig.width=4, fig.height=4}
+fviz_cluster(object = list(data=vendidos6, cluster=clust4$clustering), stand = FALSE,
+             ellipse.type = "convex", geom = "point", show.clust.cent = FALSE,
+             labelsize = 8)  +
+  labs(title = "K-MEDOIDES + Proyeccion PCA",
+       subtitle = "Dist euclidea, K=5") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+
+## Selección y validación del método de clustering 
+
+A la vista de los resultados anteriores, es difícil decantarse por un método en concreto ya que ofrecen resultados similares. Veamos si podemos utilizar el coeficiente de Silhouette por cluster y por observación (no solamente el global) para validar los resultados y decidir con cuáles nos quedamos.
+
+```{r ward2, fig.width=6, fig.height=3}
+clust1 <- hclust(midist, method="ward.D2")
+grupos1 <- cutree(clust1, k=4)
+
+#table(grupos1)
+
+fviz_cluster(object = list(data=vendidos6, cluster=grupos1), stand = FALSE,
+             ellipse.type = "convex", geom = "point", show.clust.cent = FALSE,
+             labelsize = 8)  +
+  labs(title = "WARD + Proyeccion PCA",
+       subtitle = "Dist euclidea, K=4") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+```{r silhouette, fig.width=9, fig.height=3}
+
+#cluster --> grupos1
+#matriz --> midist
+par(mfrow = c(1,3))
+#cambiar cada vez el número de col según el color del clúster
+plot(silhouette(grupos1, midist), col=rainbow(6), border=NA, main = "WARD")
+plot(silhouette(clust3$cluster, midist), col=rainbow(5), border=NA, main = "K-MEDIAS")
+plot(silhouette(clust4$clustering, midist), col=rainbow(7), border=NA, main = "K-MEDOIDES")
+```
+A la vista de los coeficientes Silhouette, parece que el mejor resultado es el algoritmo WARD, ya que presenta menos pisos mal clasificados (es decir, con coeficiente negativo), por lo que nos decantaremos por este método.
+
+
+
+## Interpretación de los resultados del clustering
+
+En primer lugar, vamos a utilizar el PCA para ver cuáles de las variables originales han contribuido más a la determinación de los clusters obtenidos mediante k-medias.
+
+```{r PCAkmeans22, fig.width=4, fig.height=4}
+#vendidos5 ya está escalado
+boxplot(vendidos6, ylab = "Ventas", main = "Datos escalados", col = "salmon", las = 2,
+        cex.axis = 0.6)
+
+misclust = factor(grupos1)
+miPCA = PCA(vendidos6, scale.unit = FALSE)
+eig.val = get_eigenvalue(miPCA)
+Vmedia = 100 * (1/nrow(eig.val))
+fviz_eig(miPCA, addlabels = TRUE) +
+  geom_hline(yintercept=Vmedia, linetype=2, color="red")
+
+fviz_pca_ind(miPCA, geom = "point", habillage = misclust, addEllipses = FALSE, 
+             palette = rainbow(5))
+
+fviz_pca_ind(miPCA, geom = "point", habillage = misclust, addEllipses = FALSE, axes = 3:4,
+             palette = rainbow(5))
+
+fviz_pca_var(miPCA, axes = 3:4)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+library("readxl")
+
+vendidos = read.csv("../datos/def.csv")
+distritos = read.csv("../datos/distritos_info.csv", sep=";")
+a_vender = read.csv("../datos/venta_pisos_eva.csv", sep=";", encoding="utf-8")
+
+ 
+
+a_vender
+cols = colnames(vendidos)
+
+
+a_vender2 = a_vender[,setdiff(colnames(a_vender), c("ad_characteristics_hasGarden", "ad_characteristics_hasSwimmingPool", "ad_characteristics_hasTerrace", "ad_condition_isGoodCondition", "ad_operation", "address_location_x", "date_insert", "date_update", "latitude", "longitude", "url", "date_last", "address_location_y", "ascensor", "ascensor_bool", "day_insert", "vendido", "day_last"))]
+
+cols = cols[-c(1,11,12,21,20)]
+
+colnames(a_vender2) = cols
+a_vender2
+
+a_vender2<- a_vender2[order(a_vender2$distrito), ]
+distritos<- distritos[order(distritos$distrito), ]
+
+```
+
+```{r}
+library(dplyr)
+
+
+a_vender2 = a_vender2[!is.na(a_vender2$m2),]
+
+
+info_dist = a_vender2 %>% group_by(distrito)  %>%
+                    summarise(media_m2 = mean(m2), num_pisos=n(), media_hab = round(mean(habitaciones),2), reformar= sum(a_reformar==1), a_reformar_por100 = round((sum(a_reformar==1)*100)/n(),2))
+
+info_dist
+distritos
+
+distritos_infon = cbind(distritos,info_dist[2:length(info_dist)])
+distritos_infon
+
+write.csv2(distritos_infon, "../datos/distritos_infon.csv", row.names=FALSE)
+
+```
+

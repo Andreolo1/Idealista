@@ -1,0 +1,178 @@
+---
+title: "distritos_info"
+author: "andrea"
+date: "25/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### LIBRERÍAS NECESARIAS:
+
+```{r}
+library(dplyr)
+library('arules')
+library('leaflet')
+library(tidyr)
+```
+
+
+# INFORMACIÓN POR DISTRITOS:
+
+### FICHEROS NECESARIOS
+```{r}
+valencia = read.csv("venta_pisos.csv", sep=';', row.names = 1, as.is = FALSE)
+locales = read.csv("localesR.csv", sep=";")
+```
+
+
+### LIMPIEZA  Y TRANSFORMACIÓN DEL ARCHIVO
+```{r}
+# eliminar variables sin información sobre metros construidos
+valencia = valencia[!is.na(valencia$ad_characteristics_constructedArea),]
+
+# eliminar aquellos pisos con más de 35 plantas (el edificio más alto de valencia tiene 35 plantas)
+valencia = valencia[valencia$planta < 35,]
+plantadata = valencia[!is.na(valencia$planta),]
+
+
+# imputación en las variables binarias que contienen nulos: 0
+valencia$ad_characteristics_hasParking[is.na(valencia$ad_characteristics_hasParking)] = 0
+valencia$ad_characteristics_hasLift[is.na(valencia$ad_characteristics_hasLift)] = 0
+valencia$ad_characteristics_hasSwimmingPool[is.na(valencia$ad_characteristics_hasSwimmingPool)] = 0
+valencia$ad_characteristics_hasTerrace[is.na(valencia$ad_characteristics_hasTerrace)] = 0
+valencia$ad_characteristics_hasGarden[is.na(valencia$ad_characteristics_hasGarden)] = 0
+
+# discretizamos según los m2
+valencia$m2class = discretize(valencia$ad_characteristics_constructedArea, method='frequency', breaks=6, labels=c('30-70', '71-86', '87-99', '100-118', '119-148', '149-750'))
+
+valencia
+```
+
+
+
+## CREACIÓN DEL NUEVO ARCHIVO CON LA INFORMACIÓN AGRUPADA POR DISTRITOS
+
+FILAS: los 19 distritos valencianos con los que estamos trabajando.
+COLUMNAS: información relativa a los distritos, sacada mediante la agrupación y ponderación de sus pisos.
+```{r}
+#CREAMOS LAS FILAS PARA DISTRITO (agrupación por distrito):
+auxi = valencia %>% group_by(distrito)  %>%
+                    summarise(media_m2 = mean(ad_characteristics_constructedArea), 
+                              num_pisos=n(), media_hab = mean(ad_characteristics_roomNumber), 
+                              porc_reformar= sum(ad_condition_isNeedsRenovating==1)/n()*100,                               porc_inmobiliaria=sum(ad_owner_type==2)/num_pisos*100,
+                              porc_parking=sum(ad_characteristics_hasParking==1)/n()*100,
+                              porc_ascensor=sum(ad_characteristics_hasLift==1)/n()*100,
+                              porc_piscina=sum(ad_characteristics_hasSwimmingPool==1)/n()*100,
+                              porc_terraza=sum(ad_characteristics_hasTerrace)/n()*100,
+                              porc_jardin=sum(ad_characteristics_hasGarden)/n()*100,
+                              a_reformar_por100 = round((sum(ad_condition_isNeedsRenovating==1)*100)/n(),2))
+
+
+# altura media a la que se venden los pisos
+auxi2 = plantadata %>% group_by(distrito) %>% summarise(media_planta = mean(planta))
+
+#juntamos auxi y auxi2
+auxi = cbind(auxi[1:19,], auxi2[,2])
+
+
+# FRECUENCIA DE VIVIENDAS POR RANGO DE PRECIO EN CADA DISTRITO
+# obtenemos la información por rango
+rango1 = data.frame(table(valencia$distrito[valencia$m2class == '30-70']))
+rango2 = data.frame(table(valencia$distrito[valencia$m2class == '71-86']))
+rango3 = data.frame(table(valencia$distrito[valencia$m2class == '87-99']))
+rango4 = data.frame(table(valencia$distrito[valencia$m2class == '100-118']))
+rango5 = data.frame(table(valencia$distrito[valencia$m2class == '119-148']))
+rango6 = data.frame(table(valencia$distrito[valencia$m2class == '149-750']))
+numero = data.frame(table(valencia$distrito)) # total
+
+# juntamos todo
+final = cbind(numero, rango1[,2], rango2[,2], rango3[,2], rango4[,2], rango5[,2], rango6[,2])
+colnames(final) = c('distrito','total', '30-70', '71-86', '87-99', '100-118', '119-148', '149-750')
+final[is.na(final)] <- 0
+
+# sacamos probabilidades
+final_p = data.frame('distrito' = final$distrito)
+final_p$`30-70` = (final$`30-70`/final$total)*100
+final_p$`71-86` = (final$`71-86` / final$total)*100
+final_p$`87-99` = (final$`87-99` / final$total)*100
+final_p$`100-118` = (final$`100-118` / final$total)*100
+final_p$`119-148` = (final$`119-148` / final$total)*100
+final_p$`149-750` = (final$`149-750` / final$total)*100
+
+auxi = cbind(auxi, final_p[,2:7])
+
+
+
+# precio medio por distrito
+valencia_vend = valencia[valencia$vendido == 1,]
+
+auxi2 = valencia_vend %>% group_by(distrito) %>% 
+                    summarise(precio_medio_vendidos = mean(price), dias_medio_casa_vendidos = mean(tiempo_venta), pisos_vendidos = n(), precio_m2 = mean(price/ad_characteristics_constructedArea))
+auxi2 = auxi2[1:19,]
+auxi = cbind(auxi, auxi2[,2:4])
+auxi$porc_vendidos = (auxi$pisos_vendidos/auxi$num_pisos)*100
+
+
+
+# Precio medio del piso por inmobiliaria
+valencia_inmob=valencia[valencia$ad_owner_type!=1, ]
+
+df_grp_region = valencia_inmob %>% group_by(distrito)  %>%
+  summarise(mprecio_piso_inmobiliaria = mean(price_last))
+
+auxi2 = data.frame(df_grp_region$mprecio_piso_inmobiliaria)
+colnames(auxi2) = c("mprecio_piso_inmobiliaria")
+
+
+# Precio medio del piso por particular
+valencia_part=valencia[valencia$ad_owner_type!=2, ]
+
+df_grp_region = valencia_part %>% group_by(distrito)  %>%
+  summarise(mprecio_piso_particular = mean(price_last))
+
+auxi2$mprecio_piso_particular=df_grp_region$mprecio_piso_particular
+
+
+# Número medio de baños
+valencia[valencia$ad_characteristics_bathNumber!=41, ]
+
+df_grp_region = valencia %>% group_by(distrito)  %>%
+  summarise(media_baño = mean(ad_characteristics_bathNumber))
+
+auxi2$media_baños=df_grp_region$media_baño
+auxi = cbind(auxi, auxi2[1:19,])
+
+
+
+### LOCALES
+
+# obtener los locales vendidos (los usaremos para distinguir precios)
+locales_vend = locales[locales$vendido ==1,]
+
+# variables acerca de todos los locales
+aux_locales = locales %>% group_by(distrito) %>% summarise(num_locales = n(), precio_medio_locales = mean(price))
+
+# variables acerca de los locales vendidos
+aux_locales_vend = locales_vend %>% group_by(distrito) %>% summarise(dias_medio_locales_vendidos = mean(tiempo_venta), precio_medio_locales_vendidos = mean(price), precio_desv_locales_vendidos = sd(price))
+
+pobles_nord = c("pobles del nord", 0, 0, 0, 0)  # no se ha vendido ningun local en este distrito
+aux_locales_vend = rbind(aux_locales_vend, pobles_nord)
+aux_locales_vend = aux_locales_vend[order(aux_locales_vend$distrito),]
+aux_locales_vend$dias_medio_locales_vendidos=as.numeric(aux_locales_vend$dias_medio_locales_vendidos)
+aux_locales_vend$precio_medio_locales_vendidos=as.numeric(aux_locales_vend$precio_medio_locales_vendidos)
+aux_locales_vend$precio_desv_locales_vendidos=as.numeric(aux_locales_vend$precio_desv_locales_vendidos)
+
+# unimos todo
+auxi = cbind(auxi, aux_locales[,2:3], aux_locales_vend[,2:4])
+
+```
+
+#### GUARDAR DATAFRAME
+```{r}
+# write.csv2(auxi, "distritos_info.csv")
+```
+
+
