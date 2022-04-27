@@ -462,9 +462,23 @@ c1 = c[['r']]
 c2 = c[['P']] #p-value
 kable(c1, format="latex", booktabs = T) %>% kable_styling(font_size = 8) 
 kable(c2, format="latex", booktabs = T) %>% kable_styling(font_size = 8)
-corrplot(cor, method = 'number')
+corrplot(cor, method = 'number', number.font = 4, tl.col = 'black', number.cex = 0.75)
 ```
 
+```{r cor variab binarias, echo=TRUE}
+library(corrplot)
+library (Hmisc)
+vendCor = vendImp[,c("jardin", "ascensor", "piscina", "terraza", "a_reformar", "armarios.empotrados", "acceso.adaptado", "aire.acondicionado", 'balcon', 'trastero', 'garaje.incluido', 'calefaccion')]
+index = 1:ncol(vendCor)
+vendCor[, index] = lapply(vendCor[, index], as.numeric)
+cor = cor(vendCor)
+c = rcorr(as.matrix(vendCor),type="pearson")
+c1 = c[['r']]
+c2 = c[['P']] #p-value
+kable(c1, format="latex", booktabs = T) %>% kable_styling(font_size = 8) 
+kable(c2, format="latex", booktabs = T) %>% kable_styling(font_size = 8)
+corrplot(cor, method = 'number', number.font = 4, tl.col = 'black', number.cex = 0.75)
+```
 
 
 ### 6. Comparar precio del m2 según idealista y según el catastro
