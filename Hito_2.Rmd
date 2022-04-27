@@ -16,7 +16,7 @@ library(kableExtra)
 
 # 1. Lectura datos
 ```{r datos, echo=TRUE}
-vendidas = read.csv("../datos/viviendas_vendidas.csv", sep=';', row.names = 1, as.is = TRUE, encoding = 'UTF-8')
+vendidas = read.csv("datos/viviendas_vendidas.csv", sep=';', row.names = 1, as.is = TRUE, encoding = 'UTF-8')
 ```
 
 # 2. Análisis exploratorio de los datos y limpieza
