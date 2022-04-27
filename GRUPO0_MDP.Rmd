@@ -17,7 +17,7 @@ output:
 
 ## Lectura de la BD
 ```{r lectura}
-vendidos = read.csv("../datos/pisos_vendidos.csv", row.names = 1, as.is = TRUE, sep=';')
+vendidos = read.csv("datos/pisos_vendidos.csv", row.names = 1, as.is = TRUE, sep=';')
 ```
 
 ## Eliminación de variables
