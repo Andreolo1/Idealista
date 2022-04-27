@@ -1,0 +1,307 @@
+---
+title: "Análisis de la Venta de Pisos en la ciudad de Valencia"
+author: "Eva Cantín, Adriana Chust, Belén Inglés y Andrea Sancho"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+  pdf_document: default
+---
+
+# Análisis exploratorio inicial y/o pre-proceso de los datos 
+
+## Lectura de la BD
+```{r lectura}
+vendidos = read.csv("../datos/pisos_vendidos.csv", row.names = 1, as.is = TRUE, sep=';')
+```
+
+## Eliminación de variables
+``` {r eliminar variables}
+vendidos = vendidos[,setdiff(colnames(vendidos), c("ad_condition_isGoodCondition", "ad_operation", "address_location_x", "date_insert", "date_update", "url", "date_last", "address_location_y", "day_insert", "day_last", "vendido", "latitude", "longitude", "ad_typology", "ad_characteristics_hasParking", "price"))]
+
+
+colnames(vendidos)= c('baños', 'm2', 'jardin', 'ascensor', 'piscina', 'terraza', 'habitaciones', 'a_reformar', 'tipo_vendedor', 'precio_final', 'distrito', "armarios.empotrados", "acceso.adaptado", "aire.acondicionado", "balcon", "trastero", "garaje.incluido", "calefaccion", "planta", "vistas", "variacion_precio", "dias_venta")
+```
+
+ 
+
+## Exploración de Variables y Observaciones
+
+#### BAÑOS, HABITACIONES Y M2 
+```{r baños_hab_m2, echo=TRUE}
+#ver cuántos baños tenemos a 0
+hist(vendidos$baños, main = "Histograma de frecuencias por BAÑO", 
+     ylab = "Frecuencia", breaks=100)
+
+#Número máximo de baños --> 41
+max(vendidos$baños, na.rm=TRUE)
+
+#Ver cuántos pisos no tienen baños --> 81 pisos
+sum(vendidos$baños==0, na.rm=TRUE)
+nulos = which(vendidos$baños==0)
+anom = which(vendidos$baños>10)
+
+vendidos = vendidos[-nulos, ]
+vendidos = vendidos[-anom, ]
+
+hist(vendidos$baños, main = "Histograma de frecuencias por BAÑO", 
+     ylab = "Frecuencia", breaks=100)
+
+#HABITACIONES
+hist(vendidos$habitaciones) 
+sum(vendidos$habitaciones == 0, na.rm=TRUE) 
+quitar = which(vendidos$habitaciones == 0)
+prec_quitar = which(vendidos$precio == 0)
+vendidos = vendidos[-quitar, ]
+```
+
+### DIAS_VENTA
+```{r dias_venta, echo=TRUE}
+vendidos$dias_venta = gsub(" days", "", vendidos$dias_venta)
+vendidos = transform(vendidos, dias_venta = as.numeric(dias_venta))
+
+# Ponemos a 0 los días_venta a aquellos pisos que tengan días negativos
+vendidos$dias_venta[vendidos$dias_venta < 0] = 0
+```
+
+
+
+## Transformación y recodificación de variables
+
+si queremos incluir una variable categórica en un modelo que solo acepta variables numéricas, podemos recodificar la variable categórica a variables numéricas 0-1 y así ya la podríamos incluir en dicho modelo. Tenemos dos posibilidades. Elegiremos una u otra dependiendo del modelo. La primera es, como se hace en los modelos de regresión lineal clásicos, definir una de las $K$ categorías como referencia y definir variables binarias para las $K-1$ categorías restantes. 
+
+Ahora añadimos a la base de datos la variable "vistas" codificada a binaria 0-1. 
+
+```{r nueva, echo = TRUE}
+# a binarias: vistas (interior = 0, exterior = 1)
+vendidos$vistas[vendidos$vistas == 'exterior'] = 1
+vendidos$vistas[vendidos$vistas == 'interior'] = 0
+vendidos$vistas[vendidos$vistas == ''] = NA
+vendidos$vistas[vendidos$vistas == 'TRUE'] = NA
+vendidos$vistas[vendidos$vistas == 'FALSE'] = NA
+```
+
+
+
+## Valores faltantes. Imputación.
+Generaremos en primer lugar una tabla resumen con el número y porcentaje de valores faltantes en cada variable en la base de datos.
+
+```{r tipos, echo = TRUE}
+descVend = data.frame("variable" = colnames(vendidos),
+                      "tipo" = c(rep("numerical", 2), rep("binary", 4), "numerical", rep("binary", 2), "numerical", "categorical", rep("binary", 7), "numerical", rep("binary", 1), rep("numerical",2)),stringsAsFactors = FALSE)
+rownames(descVend) = descVend$variable
+```
+
+
+```{r missing, echo = TRUE}
+library(kableExtra)
+numNA = apply(vendidos, 2, function(x) sum(is.na(x)))
+percNA = round(100*apply(vendidos, 2, function(x) mean(is.na(x))), 2)
+tablaNA = data.frame("tipo" = descVend[,-1], numNA, percNA)
+kable(tablaNA, format="latex", booktabs = T) %>% kable_styling() 
+tablaNA
+```
+
+Como todas nuestras variables tienen un porcentaje de NAs, menor al 20%, consideramos que no tiene sentido eliminarlas, ni eliminar los registros. Por ello, vamos a hacer una imputación con la librería mice().
+
+Ahora generamos una tabla con el porcentaje de NAs en la variable "vistas" por distrito. Queremos ver cuáles son los distritos que tienen pisos sin esta variable. 
+```{r faltantes vistas distrito, echo= TRUE}
+#table(vendidos$vistas, vendidos$distrito, useNA = 'always')[3,]
+#table(vendidos$distrito)
+df1 = data.frame(c(9/64*100, 30/104*100, 5/23*100, 13/92*100, 13/106*100, 31/237*100, 9/86*100, 22/172*100, 23/124*100, 37/227*100, 24/109*100, 34/116*100, 23/160*100, 60/286*100, 6/20*100, 3/5*100, 15/67*100, 43/171*100, 26/154*100), row.names=rownames(table(vendidos$distrito)))
+
+colnames(df1) = c("PercNA Vistas")
+kable(df1, format="latex", booktabs = T) %>% kable_styling()
+df1
+```
+
+
+
+```{r imputar vistas, echo=TRUE, warning=FALSE}
+library(mice)
+
+#convertimos las variables binarias a factores
+vendidos[which(descVend$tipo == 'binary')] = lapply(vendidos[which(descVend$tipo == 'binary')], as.factor)
+vend = vendidos
+vendImp = mice(vend, seed = 123, m = 5, print = FALSE, method = NULL)
+
+head(vendImp$imp$vistas)
+vendImp = complete(vendImp) #Complete a data frame with missing combinations of data
+#summary(vendImp)
+```
+
+Tras haber imputado los datos faltantes con la librería mice, vamos a ver cómo han cambiado las variables que tenían datos faltantes ("días_venta", "planta" y "vistas"):
+```{r cambios imputacion, echo=TRUE}
+summary(vend$vistas)
+summary(vendImp$vistas)
+
+summary(vend$dias_venta)
+summary(vendImp$dias_venta)
+
+summary(vend$planta)
+summary(vendImp$planta)
+```
+
+Volvemos a generar la tabla con los NAs por variable. Como se puede ver, ya no tenemos ningún dato faltante en nuestra BD
+```{r missing tras imputar, echo=TRUE}
+numNA = apply(vendImp, 2, function(x) sum(is.na(x)))
+percNA = round(100*apply(vendImp, 2, function(x) mean(is.na(x))), 2)
+tablaNA = data.frame("tipo" = descVend[,-1], numNA, percNA)
+tablaNA
+```
+
+
+# ANÁLISIS 1: AFC MÚLTIPLE
+
+Antes de proceder a realizar el análisis factorial de correspondencias, cargamos las librerías necesarias para trabajar con R
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(FactoMineR)
+library(factoextra)
+library(corrplot)
+```
+
+
+Para aplicar AFC, nuestras variables han de ser cualitativas. Como ya hemos hecho previamente (**ver apartado 1.5**), las variables binarias se caracterizan como factores. La variable distrito se dejará como categórica. El resto (las cuantitativas) se dejan en numérico.
+
+Realizamos AFC múltiple, pues tenemos varias variables cualitativas correspondientes a más de 1000 observaciones. La variable "distrito" la dejamos como auxiliar cualitativa. Las variables "baños", "m2", "habitaciones", "precio_final", "planta", "variacion_precio" y "días_venta", como son cuantitativas (numéricas) las dejamos como auxiliares también.
+
+```{r afc, echo=TRUE}
+res.mca <- MCA(vendImp[,1:22], graph = FALSE, quanti.sup = c(1,2,7,10,19,21,22), quali.sup = 11) 
+
+eig.val <- get_eigenvalue(res.mca)
+Vmedia = 100 * (1/nrow(eig.val))
+
+fviz_eig(res.mca, addlabels = TRUE) + geom_hline(yintercept=Vmedia, linetype=2, color="red") 
+
+kable(head(eig.val))
+
+res.mca <- MCA(vendidos[,1:22], graph = FALSE, quanti.sup = c(1,2,7,10,19,21,22), quali.sup = 11, ncp = 5)
+```
+
+Seleccionaremos 5 dimensiones, que explican el `r round(eig.val[5,3],1)`% de la inercia total.
+
+## Interpretación del modelo
+
+A continuación se muestran algunos gráficos ejemplo para poder interpretar el modelo.
+
+### Individuos
+
+```{r mca3, fig.width=5, fig.height=5}
+
+# Dimensiones 1 y 2
+fviz_mca_ind(res.mca, axes = c(1,2),
+             label = "none",
+              habillage = 'distrito')
+
+# Dimensiones 1 y 3
+fviz_mca_ind(res.mca, axes = c(1,3),
+             label = "none",
+              habillage = 'distrito')
+
+# Dimensiones 3 y 4
+fviz_mca_ind(res.mca, axes = c(3,4),
+             label = "none",
+              habillage = 'distrito')
+
+# Dimensiones 4 y 5
+fviz_mca_ind(res.mca, axes = c(4,5),
+             label = "none",
+              habillage = 'distrito')
+```
+
+Vamos a colorear por otras variables (que creemos que pueden tener relación)
+
+```{r otras variables}
+fviz_ellipses(res.mca, c("jardin", "piscina"), geom = "point")
+```
+
+Hay clara relación positiva entre tener jardin y tener piscina. Aquellas viviendas que no tienen jardin, tampoco endrán piscina, y las que sí tienen jardín, serán más propensas a tener también piscina.
+
+```{r otras variables2}
+fviz_ellipses(res.mca, c("terraza", "ascensor"), geom = "point")
+```
+La relación en este caso no es tan clara. Parece que las viviendas que gozan de ascensor sí tienen terraza, pero pisos sin terraza los hay con y sin ascensor.
+
+```{r otras variables3}
+fviz_ellipses(res.mca, c("a_reformar"), geom = "point")
+```
+
+```{r otras variables4}
+fviz_ellipses(res.mca, c("trastero", "garaje.incluido"), geom = "point")
+```
+También hay relación entre estas dos variables. Es decir, parece que si una casa tiene garaje, tiene también trastero. De igual forma ocurre al revés: las casas que no tienen garaje, no tienen trastero.
+
+```{r otras variables5}
+fviz_ellipses(res.mca, c("calefaccion", "aire.acondicionado"), geom = "point")
+```
+De igual modo que en todas las anteriores, también hay relación positiva entre las variables calefacción y aire acondicionado. En muchos pisos ambas se controlan desde un mismo sistema, lo cual tiene sentido que si hay aire acondicionado haya también calefacción.
+
+### Variables
+
+
+```{r mca4, fig.width=5, fig.height=5, echo=TRUE}
+
+# Correlación entre variables y dos primeras dimensiones
+fviz_mca_var(res.mca, choice = "mca.cor", repel = TRUE, 
+ggtheme = theme_minimal())
+
+# Correlación entre variables y dimensiones 1 y 3
+fviz_mca_var(res.mca, choice = "mca.cor", repel = TRUE, 
+ggtheme = theme_minimal(), axes = c(3,4))
+
+# Correlación entre variables y dimensiones 3 y 4
+fviz_mca_var(res.mca, choice = "mca.cor", repel = TRUE, 
+ggtheme = theme_minimal(), axes = c(3,4))
+
+# Correlación entre variables y dimensiones 4 y 5
+fviz_mca_var(res.mca, choice = "mca.cor", repel = TRUE, 
+ggtheme = theme_minimal(), axes = c(4,5))
+
+# Correlación entre variables y dimensiones
+corrplot(res.mca$var$cos2, is.corr=FALSE, tl.col = 1, win.asp = 0.5, cl.ratio = 0.3, cl.cex = 0.8)
+
+fviz_cos2(res.mca, choice = "var", axes = 1:5)
+
+fviz_mca_var(res.mca, col.var="steelblue", shape.var = 15, repel = TRUE)
+
+```
+Representamos ahora las contribuciones de las variables a cada dimensión
+
+```{r variables2}
+
+# Contributions de las variables a la dimension 1
+fviz_contrib(res.mca, choice = "var", axes = 1, top = 15)
+# Contributions de las variables a la dimension 2
+fviz_contrib(res.mca, choice = "var", axes = 2, top = 15)
+# Contributions de las variables a la dimension 3
+fviz_contrib(res.mca, choice = "var", axes = 3, top = 15)
+# Contributions de las variables a la dimension 4
+fviz_contrib(res.mca, choice = "var", axes = 4, top = 15)
+# Contributions de las variables a la dimension 5
+fviz_contrib(res.mca, choice = "var", axes = 5, top = 15)
+
+# Top 10 variables con el cos2 mas alto
+fviz_mca_var(res.mca, select.var= list(cos2 = 10), repel = TRUE)
+
+```
+
+### Biplot
+
+Veamos ahora la relación entre variables e individuos
+
+```{r mca5, fig.width=5, fig.height=5}
+# Biplots simétricos
+fviz_mca_biplot(res.mca, geom.ind = "point",
+repel = TRUE, ggtheme = theme_minimal(), habillage = 'distrito', select.var = list(contrib = 10), col.var = 'black')
+
+# top 10 individuos y variables con contribuciones mas altas
+fviz_mca_biplot(res.mca, select.ind = list(contrib = 50), 
+select.var = list(contrib = 10), repel = TRUE, ggtheme = theme_minimal(), habillage = 'distrito', label = 'var', col.var = 'black')
+```
