@@ -28,7 +28,7 @@ library(corrplot)
 Primeramente abrimos el archivo, y echamos un primer vistazo a las variables mediante la función summary().
 
 ```{r abrir}
-vendidos = read.csv('pisosMDP.csv', sep = ';')
+vendidos = read.csv('datos/pisosMDP.csv', sep = ';')
 summary(vendidos)
 ```
 Como vemos, tenemos varias variables binarias que están clasificadas como categóricas. A continuación, procedemos a tipar las variables.
